@@ -164,7 +164,7 @@
 <body>
   <div class="container">
     <div class="header">
-      <h2>🔍 Employer Finder Configuration</h2>
+      <h2>🔍 Employer Finder - Configure & Search</h2>
     </div>
     
     <div class="content">
@@ -208,19 +208,32 @@
         </div>
         
         <div class="form-group">
-          <label>Example Search Criteria</label>
+          <label for="searchInstructions">Search Instructions (Optional)</label>
+          <textarea 
+            id="searchInstructions" 
+            name="searchInstructions" 
+            placeholder="Describe the types of companies you want to find. Be specific about industry, location, size, technology focus, etc. Examples: 'Tech startups in San Francisco focused on AI', 'Manufacturing companies in Germany with 100-500 employees'"
+            style="min-height: 80px; resize: vertical;"
+          ></textarea>
+          <div class="help-text">
+            <strong>Be specific about:</strong> Industry/sector, location/region, company size/stage, technology focus, funding stage, and any other criteria.
+          </div>
+        </div>
+        
+        <div class="form-group">
+          <label>Example Search Instructions</label>
           <div class="example-text">
-            • "fintech startups in New York"<br>
-            • "manufacturing companies in Germany"<br>
-            • "AI companies in San Francisco"<br>
-            • "healthcare startups in Boston"<br>
-            • "sustainable energy companies in Europe"
+            • "fintech startups in New York that are Series A or B funded"<br>
+            • "manufacturing companies in Germany with 100-500 employees"<br>
+            • "AI companies in San Francisco focused on machine learning"<br>
+            • "healthcare startups in Boston working on digital health"<br>
+            • "sustainable energy companies in Europe with solar focus"
           </div>
         </div>
         
         <div class="buttons">
           <button type="button" class="btn btn-secondary" onclick="closeDialog()">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Configuration</button>
+          <button type="submit" class="btn btn-primary">Save & Search</button>
         </div>
       </form>
     </div>
@@ -261,11 +274,12 @@
       const apiKey = document.getElementById('apiKey').value.trim();
       const maxCompanies = document.getElementById('maxCompanies').value;
       const highlightColor = document.getElementById('highlightColor').value;
+      const searchInstructions = document.getElementById('searchInstructions').value.trim();
       
-             if (!apiKey) {
-         showStatus('API key is required - You must enter your own OpenAI API key to use this tool', 'error');
-         return;
-       }
+      if (!apiKey) {
+        showStatus('API key is required - You must enter your own OpenAI API key to use this tool', 'error');
+        return;
+      }
       
       // Show loading state
       const submitBtn = document.querySelector('button[type="submit"]');
@@ -280,8 +294,26 @@
           submitBtn.textContent = originalText;
           submitBtn.disabled = false;
           
-          // Close dialog after a short delay
-          setTimeout(closeDialog, 2000);
+          // If search instructions were provided, offer to search immediately
+          if (searchInstructions) {
+            const searchResponse = confirm('Configuration saved! Would you like to search for companies now using your instructions?');
+            if (searchResponse) {
+              // Call the search function
+              google.script.run
+                .withSuccessHandler(function() {
+                  showStatus('Search completed successfully!', 'success');
+                  setTimeout(closeDialog, 2000);
+                })
+                .withFailureHandler(function(error) {
+                  showStatus('Search error: ' + error.message, 'error');
+                })
+                .searchCompaniesWithInstructions(searchInstructions, parseInt(maxCompanies));
+            } else {
+              setTimeout(closeDialog, 2000);
+            }
+          } else {
+            setTimeout(closeDialog, 2000);
+          }
         })
         .withFailureHandler(function(error) {
           showStatus('Error: ' + error.message, 'error');

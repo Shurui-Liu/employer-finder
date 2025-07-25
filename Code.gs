@@ -65,15 +65,43 @@ function searchAndAddCompanies() {
 
 /**
  * Get existing companies from the first column of the sheet
+ * Returns a Set for O(1) lookup efficiency
  */
 function getExistingCompanies(sheet) {
   const lastRow = sheet.getLastRow();
-  if (lastRow === 0) return [];
+  if (lastRow === 0) return new Set();
   
   const companyRange = sheet.getRange(1, 1, lastRow, 1);
   const companies = companyRange.getValues().flat().filter(company => company !== '');
   
-  return companies.map(company => company.toString().toLowerCase().trim());
+  // Create a Set for O(1) lookup efficiency
+  const companySet = new Set();
+  companies.forEach(company => {
+    const normalizedName = normalizeCompanyName(company.toString());
+    if (normalizedName) {
+      companySet.add(normalizedName);
+    }
+  });
+  
+  return companySet;
+}
+
+/**
+ * Normalize company name for consistent comparison
+ * Handles common variations and edge cases
+ */
+function normalizeCompanyName(companyName) {
+  if (!companyName || typeof companyName !== 'string') return null;
+  
+  return companyName
+    .toLowerCase()
+    .trim()
+    // Remove common suffixes/prefixes that don't affect uniqueness
+    .replace(/\s+(inc\.?|corp\.?|corporation|llc|ltd\.?|limited|company|co\.?|group|technologies|tech|systems|solutions|services|international|intl\.?)$/i, '')
+    // Remove punctuation and extra spaces
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
@@ -82,10 +110,47 @@ function getExistingCompanies(sheet) {
 function getUserInput() {
   const ui = SpreadsheetApp.getUi();
   
-  // Get search criteria
+  // Show detailed instructions dialog
+  const instructionsResponse = ui.alert(
+    'Company Search Instructions',
+    'You can now provide detailed instructions about the types of companies you want to find.\n\n' +
+    'Examples of detailed instructions:\n' +
+    '• "Tech startups in San Francisco focused on AI and machine learning with 10-100 employees"\n' +
+    '• "Manufacturing companies in Germany with 100-500 employees in automotive industry"\n' +
+    '• "Fintech companies in New York that are Series A or B funded and focus on mobile payments"\n' +
+    '• "Healthcare startups in Boston working on digital health solutions and telemedicine"\n' +
+    '• "Sustainable energy companies in Europe with renewable technology and solar focus"\n\n' +
+    'Be as specific as possible about:\n' +
+    '• Industry/sector\n' +
+    '• Location/region\n' +
+    '• Company size/stage\n' +
+    '• Technology focus\n' +
+    '• Funding stage\n' +
+    '• Any other specific criteria\n\n' +
+    'Click OK to continue with detailed input.',
+    ui.ButtonSet.OK_CANCEL
+  );
+  
+  if (instructionsResponse === ui.Button.CANCEL) {
+    return null;
+  }
+  
+  // Get detailed search criteria
   const criteriaResponse = ui.prompt(
-    'Company Search Criteria',
-    'Please describe the type of companies you want to search for (e.g., "tech startups in San Francisco", "manufacturing companies in Europe"):',
+    'Detailed Company Search Instructions',
+    'Please provide detailed instructions about the types of companies you want to find:\n\n' +
+    'Examples:\n' +
+    '• "Tech startups in San Francisco focused on AI and machine learning"\n' +
+    '• "Manufacturing companies in Germany with 100-500 employees"\n' +
+    '• "Fintech companies in New York that are Series A or B funded"\n' +
+    '• "Healthcare startups in Boston working on digital health solutions"\n' +
+    '• "Sustainable energy companies in Europe with renewable technology"\n\n' +
+    'Be specific about:\n' +
+    '• Industry/sector\n' +
+    '• Location/region\n' +
+    '• Company size/stage\n' +
+    '• Technology focus\n' +
+    '• Any other specific criteria:',
     ui.ButtonSet.OK_CANCEL
   );
   
@@ -95,7 +160,7 @@ function getUserInput() {
   
   const criteria = criteriaResponse.getResponseText().trim();
   if (!criteria) {
-    ui.alert('Please provide search criteria.');
+    ui.alert('Please provide detailed search instructions.');
     return null;
   }
   
@@ -121,18 +186,26 @@ function getUserInput() {
 }
 
 /**
- * Search for companies using AI API
+ * Search for companies using AI API with efficient duplicate prevention
  */
-function searchCompaniesWithAI(criteria, count, existingCompanies) {
+function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
   try {
-    const prompt = `Find ${count} real companies that match this criteria: "${criteria}". 
+    // Convert Set to array for AI prompt (limit to first 20 to avoid token limits)
+    const existingCompaniesArray = Array.from(existingCompaniesSet).slice(0, 20);
+    const existingCompaniesText = existingCompaniesArray.length > 0 
+      ? `Avoid these companies: ${existingCompaniesArray.join(', ')}`
+      : '';
+    
+    const prompt = `Find ${count} real companies that match these detailed instructions: "${criteria}". 
     
 Requirements:
 - Return only company names, one per line
 - Do not include any explanations or additional text
 - Ensure companies are real and currently operating
-- Avoid companies that might be duplicates of: ${existingCompanies.join(', ')}
-- Focus on companies that would be relevant for the given criteria
+- ${existingCompaniesText}
+- Focus on companies that match ALL the specific criteria mentioned
+- Consider industry, location, size, technology focus, funding stage, and other details provided
+- Prioritize companies that best match the detailed requirements
 
 Format: Just list the company names, one per line.`;
 
@@ -168,7 +241,8 @@ Format: Just list the company names, one per line.`;
     const companies = aiResponse.split('\n')
       .map(company => company.trim())
       .filter(company => company && company.length > 0)
-      .filter(company => !existingCompanies.includes(company.toLowerCase()))
+      // Use efficient Set lookup for duplicate checking
+      .filter(company => !isDuplicate(company, existingCompaniesSet))
       .slice(0, count);
     
     return companies;
@@ -176,6 +250,49 @@ Format: Just list the company names, one per line.`;
   } catch (error) {
     console.error('Error calling AI API:', error);
     throw new Error(`Failed to search for companies: ${error.message}`);
+  }
+}
+
+/**
+ * Efficient duplicate checking using normalized company names
+ */
+function isDuplicate(companyName, existingCompaniesSet) {
+  const normalizedName = normalizeCompanyName(companyName);
+  return normalizedName && existingCompaniesSet.has(normalizedName);
+}
+
+/**
+ * Search for companies using instructions from the configuration interface
+ */
+function searchCompaniesWithInstructions(searchInstructions, count) {
+  try {
+    // Check if API key is configured
+    if (!CONFIG.AI_API_KEY) {
+      throw new Error('API key is not configured. Please configure your API key first.');
+    }
+    
+    // Get the active spreadsheet and sheet
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
+    
+    // Get existing companies from the first column
+    const existingCompanies = getExistingCompanies(sheet);
+    
+    // Search for new companies using AI
+    const newCompanies = searchCompaniesWithAI(searchInstructions, count, existingCompanies);
+    
+    if (newCompanies.length === 0) {
+      throw new Error('No new companies found matching your criteria.');
+    }
+    
+    // Add new companies to the sheet
+    addCompaniesToSheet(sheet, newCompanies, existingCompanies.size);
+    
+    return `Successfully added ${newCompanies.length} new companies to the sheet!`;
+    
+  } catch (error) {
+    console.error('Error in searchCompaniesWithInstructions:', error);
+    throw new Error(error.message);
   }
 }
 
@@ -200,6 +317,62 @@ function addCompaniesToSheet(sheet, newCompanies, startRow) {
 }
 
 /**
+ * Validate duplicate prevention by checking the entire sheet
+ * This function can be run manually to verify no duplicates exist
+ */
+function validateNoDuplicates() {
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
+    
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) {
+      SpreadsheetApp.getUi().alert('Sheet is empty or has only headers. No duplicates to check.');
+      return;
+    }
+    
+    const companyRange = sheet.getRange(2, 1, lastRow - 1, 1); // Skip header row
+    const companies = companyRange.getValues().flat().filter(company => company !== '');
+    
+    const normalizedCompanies = new Map(); // Map to track original names
+    const duplicates = [];
+    
+    companies.forEach((company, index) => {
+      const normalizedName = normalizeCompanyName(company.toString());
+      if (normalizedName) {
+        if (normalizedCompanies.has(normalizedName)) {
+          duplicates.push({
+            original1: normalizedCompanies.get(normalizedName),
+            original2: company.toString(),
+            normalized: normalizedName,
+            row1: normalizedCompanies.get(normalizedName + '_row'),
+            row2: index + 2 // +2 because we skipped header and arrays are 0-indexed
+          });
+        } else {
+          normalizedCompanies.set(normalizedName, company.toString());
+          normalizedCompanies.set(normalizedName + '_row', index + 2);
+        }
+      }
+    });
+    
+    if (duplicates.length === 0) {
+      SpreadsheetApp.getUi().alert(`✅ No duplicates found! Checked ${companies.length} companies.`);
+    } else {
+      let message = `❌ Found ${duplicates.length} duplicate(s):\n\n`;
+      duplicates.forEach((dup, index) => {
+        message += `${index + 1}. "${dup.original1}" (row ${dup.row1}) and "${dup.original2}" (row ${dup.row2})\n`;
+        message += `   Normalized: "${dup.normalized}"\n\n`;
+      });
+      SpreadsheetApp.getUi().alert(message);
+    }
+    
+  } catch (error) {
+    console.error('Error validating duplicates:', error);
+    SpreadsheetApp.getUi().alert('Error checking for duplicates: ' + error.message);
+  }
+}
+
+/**
  * Create a custom menu in Google Sheets
  */
 function onOpen() {
@@ -214,6 +387,7 @@ function onOpen() {
     .addItem('Test API Connection', 'testAPIConnection')
     .addItem('Clear API Key', 'clearAPIKey')
     .addSeparator()
+    .addItem('Validate No Duplicates', 'validateNoDuplicates')
     .addItem('Clear Highlights', 'clearHighlights')
     .addToUi();
 }
@@ -284,6 +458,65 @@ function showConfigurationInterface() {
     .setHeight(600);
   
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Employer Finder Configuration');
+}
+
+/**
+ * Show advanced search instructions interface
+ */
+function showSearchInstructionsInterface() {
+  // Check if API key is configured
+  if (!CONFIG.AI_API_KEY) {
+    const setupResponse = SpreadsheetApp.getUi().alert(
+      'API Key Required',
+      'You need to configure your OpenAI API key first. Would you like to set it up now?',
+      SpreadsheetApp.getUi().ButtonSet.YES_NO
+    );
+    
+    if (setupResponse === SpreadsheetApp.getUi().Button.YES) {
+      showConfigurationInterface();
+    }
+    return;
+  }
+  
+  // Create HTML template for search instructions
+  const htmlTemplate = HtmlService.createTemplateFromFile('SearchInstructionsInterface');
+  
+  const htmlOutput = htmlTemplate.evaluate()
+    .setWidth(600)
+    .setHeight(700);
+  
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Advanced Company Search');
+}
+
+/**
+ * Search for companies using detailed instructions from the interface
+ */
+function searchCompaniesWithInstructions(searchInstructions, count) {
+  try {
+    // Get the active spreadsheet and sheet
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
+    
+    // Get existing companies from the first column
+    const existingCompanies = getExistingCompanies(sheet);
+    
+    // Search for new companies using AI with detailed instructions
+    const newCompanies = searchCompaniesWithAI(searchInstructions, count, existingCompanies);
+    
+    if (newCompanies.length === 0) {
+      throw new Error('No new companies found matching your detailed criteria.');
+    }
+    
+    // Add new companies to the sheet
+    addCompaniesToSheet(sheet, newCompanies, existingCompanies.size);
+    
+    // Show success message
+    SpreadsheetApp.getUi().alert(`Successfully added ${newCompanies.length} new companies to the sheet!`);
+    
+  } catch (error) {
+    console.error('Error in searchCompaniesWithInstructions:', error);
+    throw new Error('Failed to search for companies: ' + error.message);
+  }
 }
 
 /**
