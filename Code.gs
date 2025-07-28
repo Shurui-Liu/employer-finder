@@ -233,12 +233,17 @@ function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
     }
     
     const foundCompanies = [];
-    const maxAttempts = 5; // Prevent infinite loops
+    const maxAttempts = 15; // Increased from 5 to 15 for better coverage
     let attempts = 0;
     
     while (foundCompanies.length < count && attempts < maxAttempts) {
       attempts++;
-      console.log(`Search attempt ${attempts}: Found ${foundCompanies.length}/${count} companies so far`);
+      console.log(`Search attempt ${attempts}/${maxAttempts}: Found ${foundCompanies.length}/${count} companies so far`);
+      
+      // Show warning if we're struggling
+      if (attempts > 5 && foundCompanies.length < count / 2) {
+        console.warn(`Struggling to find companies: ${foundCompanies.length}/${count} found after ${attempts} attempts`);
+      }
       
       // Calculate how many more companies we need
       const remainingCount = count - foundCompanies.length;
@@ -250,7 +255,10 @@ function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
         : '';
       
       // Ask for more companies than we need to account for potential duplicates
-      const requestCount = Math.min(remainingCount * 2, 10); // Request 2x what we need, max 10
+      // Increase request count if we're having trouble finding companies
+      const baseRequestCount = remainingCount * 2;
+      const difficultyMultiplier = Math.min(attempts, 3); // Increase request size for later attempts
+      const requestCount = Math.min(baseRequestCount + (difficultyMultiplier * 2), 15); // Request more, max 15
       
       const prompt = `Find ${requestCount} real companies that match these detailed instructions: "${criteria}". 
       
@@ -329,7 +337,11 @@ Format: Just list the company names, one per line.`;
     }
     
     if (finalCompanies.length < count) {
-      console.warn(`Only found ${finalCompanies.length} companies out of ${count} requested`);
+      console.warn(`Only found ${finalCompanies.length} companies out of ${count} requested after ${attempts} attempts`);
+      console.warn('This may be due to:');
+      console.warn('- High duplicate rate with existing companies');
+      console.warn('- Limited companies matching your specific criteria');
+      console.warn('- AI struggling to find unique companies in this niche');
     }
     
     return finalCompanies;
