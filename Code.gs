@@ -23,14 +23,19 @@ function searchAndAddCompanies() {
     
     // Check if API key is configured
     if (!CONFIG.AI_API_KEY) {
-      const setupResponse = SpreadsheetApp.getUi().alert(
-        'API Key Required',
-        'You need to configure your OpenAI API key first. Would you like to set it up now?',
-        SpreadsheetApp.getUi().ButtonSet.YES_NO
-      );
-      
-      if (setupResponse === SpreadsheetApp.getUi().Button.YES) {
-        showConfigurationInterface();
+      try {
+        const setupResponse = SpreadsheetApp.getUi().alert(
+          'API Key Required',
+          'You need to configure your OpenAI API key first. Would you like to set it up now?',
+          SpreadsheetApp.getUi().ButtonSet.YES_NO
+        );
+        
+        if (setupResponse === SpreadsheetApp.getUi().Button.YES) {
+          showConfigurationInterface();
+        }
+      } catch (uiError) {
+        console.error('UI not available:', uiError);
+        throw new Error('API key is not configured. Please configure your API key first using the "Configure Settings" menu option.');
       }
       return;
     }
@@ -50,7 +55,12 @@ function searchAndAddCompanies() {
     const newCompanies = searchCompaniesWithAI(userInput.criteria, userInput.count, existingCompanies);
     
     if (newCompanies.length === 0) {
-      SpreadsheetApp.getUi().alert('No new companies found matching your criteria.');
+      try {
+        SpreadsheetApp.getUi().alert('No new companies found matching your criteria.');
+      } catch (uiError) {
+        console.error('UI not available:', uiError);
+        throw new Error('No new companies found matching your criteria.');
+      }
       return;
     }
     
@@ -60,11 +70,21 @@ function searchAndAddCompanies() {
     addCompaniesToSheet(sheet, newCompanies, startRow);
     
     // Show success message
-    SpreadsheetApp.getUi().alert(`Successfully added ${newCompanies.length} new companies to the sheet!`);
+    try {
+      SpreadsheetApp.getUi().alert(`Successfully added ${newCompanies.length} new companies to the sheet!`);
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      console.log(`Successfully added ${newCompanies.length} new companies to the sheet!`);
+    }
     
   } catch (error) {
     console.error('Error in searchAndAddCompanies:', error);
-    SpreadsheetApp.getUi().alert('An error occurred: ' + error.message);
+    try {
+      SpreadsheetApp.getUi().alert('An error occurred: ' + error.message);
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      throw error; // Re-throw the original error
+    }
   }
 }
 
@@ -117,81 +137,87 @@ function normalizeCompanyName(companyName) {
  * Get user input for search criteria and company count
  */
 function getUserInput() {
-  const ui = SpreadsheetApp.getUi();
-  
-  // Show detailed instructions dialog
-  const instructionsResponse = ui.alert(
-    'Company Search Instructions',
-    'You can now provide detailed instructions about the types of companies you want to find.\n\n' +
-    'Examples of detailed instructions:\n' +
-    '• "Tech startups in San Francisco focused on AI and machine learning with 10-100 employees"\n' +
-    '• "Manufacturing companies in Germany with 100-500 employees in automotive industry"\n' +
-    '• "Fintech companies in New York that are Series A or B funded and focus on mobile payments"\n' +
-    '• "Healthcare startups in Boston working on digital health solutions and telemedicine"\n' +
-    '• "Sustainable energy companies in Europe with renewable technology and solar focus"\n\n' +
-    'Be as specific as possible about:\n' +
-    '• Industry/sector\n' +
-    '• Location/region\n' +
-    '• Company size/stage\n' +
-    '• Technology focus\n' +
-    '• Funding stage\n' +
-    '• Any other specific criteria\n\n' +
-    'Click OK to continue with detailed input.',
-    ui.ButtonSet.OK_CANCEL
-  );
-  
-  if (instructionsResponse === ui.Button.CANCEL) {
-    return null;
+  try {
+    const ui = SpreadsheetApp.getUi();
+    
+    // Show detailed instructions dialog
+    const instructionsResponse = ui.alert(
+      'Company Search Instructions',
+      'You can now provide detailed instructions about the types of companies you want to find.\n\n' +
+      'Examples of detailed instructions:\n' +
+      '• "Tech startups in San Francisco focused on AI and machine learning with 10-100 employees"\n' +
+      '• "Manufacturing companies in Germany with 100-500 employees in automotive industry"\n' +
+      '• "Fintech companies in New York that are Series A or B funded and focus on mobile payments"\n' +
+      '• "Healthcare startups in Boston working on digital health solutions and telemedicine"\n' +
+      '• "Sustainable energy companies in Europe with renewable technology and solar focus"\n\n' +
+      'Be as specific as possible about:\n' +
+      '• Industry/sector\n' +
+      '• Location/region\n' +
+      '• Company size/stage\n' +
+      '• Technology focus\n' +
+      '• Funding stage\n' +
+      '• Any other specific criteria\n\n' +
+      'Click OK to continue with detailed input.',
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (instructionsResponse === ui.Button.CANCEL) {
+      return null;
+    }
+    
+    // Get detailed search criteria
+    const criteriaResponse = ui.prompt(
+      'Detailed Company Search Instructions',
+      'Please provide detailed instructions about the types of companies you want to find:\n\n' +
+      'Examples:\n' +
+      '• "Tech startups in San Francisco focused on AI and machine learning"\n' +
+      '• "Manufacturing companies in Germany with 100-500 employees"\n' +
+      '• "Fintech companies in New York that are Series A or B funded"\n' +
+      '• "Healthcare startups in Boston working on digital health solutions"\n' +
+      '• "Sustainable energy companies in Europe with renewable technology"\n\n' +
+      'Be specific about:\n' +
+      '• Industry/sector\n' +
+      '• Location/region\n' +
+      '• Company size/stage\n' +
+      '• Technology focus\n' +
+      '• Any other specific criteria:',
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (criteriaResponse.getSelectedButton() === ui.Button.CANCEL) {
+      return null;
+    }
+    
+    const criteria = criteriaResponse.getResponseText().trim();
+    if (!criteria) {
+      ui.alert('Please provide detailed search instructions.');
+      return null;
+    }
+    
+    // Get number of companies to add
+    const countResponse = ui.prompt(
+      'Number of Companies',
+      `How many companies would you like to add? (1-${CONFIG.MAX_COMPANIES}):`,
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (countResponse.getSelectedButton() === ui.Button.CANCEL) {
+      return null;
+    }
+    
+    let count = parseInt(countResponse.getResponseText());
+    if (isNaN(count) || count < 1) {
+      count = 5; // Default value
+    } else if (count > CONFIG.MAX_COMPANIES) {
+      count = CONFIG.MAX_COMPANIES;
+    }
+    
+    return { criteria, count };
+    
+  } catch (uiError) {
+    console.error('UI not available:', uiError);
+    throw new Error('User interface is not available in this context. Please use the script from within Google Sheets.');
   }
-  
-  // Get detailed search criteria
-  const criteriaResponse = ui.prompt(
-    'Detailed Company Search Instructions',
-    'Please provide detailed instructions about the types of companies you want to find:\n\n' +
-    'Examples:\n' +
-    '• "Tech startups in San Francisco focused on AI and machine learning"\n' +
-    '• "Manufacturing companies in Germany with 100-500 employees"\n' +
-    '• "Fintech companies in New York that are Series A or B funded"\n' +
-    '• "Healthcare startups in Boston working on digital health solutions"\n' +
-    '• "Sustainable energy companies in Europe with renewable technology"\n\n' +
-    'Be specific about:\n' +
-    '• Industry/sector\n' +
-    '• Location/region\n' +
-    '• Company size/stage\n' +
-    '• Technology focus\n' +
-    '• Any other specific criteria:',
-    ui.ButtonSet.OK_CANCEL
-  );
-  
-  if (criteriaResponse.getSelectedButton() === ui.Button.CANCEL) {
-    return null;
-  }
-  
-  const criteria = criteriaResponse.getResponseText().trim();
-  if (!criteria) {
-    ui.alert('Please provide detailed search instructions.');
-    return null;
-  }
-  
-  // Get number of companies to add
-  const countResponse = ui.prompt(
-    'Number of Companies',
-    `How many companies would you like to add? (1-${CONFIG.MAX_COMPANIES}):`,
-    ui.ButtonSet.OK_CANCEL
-  );
-  
-  if (countResponse.getSelectedButton() === ui.Button.CANCEL) {
-    return null;
-  }
-  
-  let count = parseInt(countResponse.getResponseText());
-  if (isNaN(count) || count < 1) {
-    count = 5; // Default value
-  } else if (count > CONFIG.MAX_COMPANIES) {
-    count = CONFIG.MAX_COMPANIES;
-  }
-  
-  return { criteria, count };
 }
 
 /**
@@ -315,8 +341,8 @@ Format: Just list the company names, one per line.`;
 }
 
 /**
- * Check if a company name is similar to existing companies using AI
- * More accurate than rule-based similarity checking
+ * Check if a company name is similar to existing companies using comprehensive checking
+ * Checks against ALL existing companies, not just the first 20
  */
 function isDuplicate(companyName, existingCompaniesSet) {
   // Ensure existingCompaniesSet is a Set
@@ -334,10 +360,10 @@ function isDuplicate(companyName, existingCompaniesSet) {
     return true;
   }
   
-  // If no exact match, use AI to check for similarity
+  // If no exact match, check against ALL existing companies using AI
   const existingCompaniesArray = Array.from(existingCompaniesSet);
   if (existingCompaniesArray.length > 0) {
-    return checkSimilarityWithAI(companyName, existingCompaniesArray);
+    return checkSimilarityWithAllCompanies(companyName, existingCompaniesArray);
   }
   
   return false;
@@ -345,19 +371,52 @@ function isDuplicate(companyName, existingCompaniesSet) {
 
 /**
  * Use AI to check if a company name is similar to any existing companies
- * More accurate than rule-based similarity checking
+ * Checks against ALL existing companies by processing them in batches
  */
-function checkSimilarityWithAI(newCompanyName, existingCompanies) {
+function checkSimilarityWithAllCompanies(newCompanyName, existingCompanies) {
   try {
-    // Limit to first 20 existing companies to avoid token limits
-    const limitedExisting = existingCompanies.slice(0, 20);
+    const batchSize = 20; // Process 20 companies at a time to stay within token limits
+    const totalCompanies = existingCompanies.length;
     
+    console.log(`Checking "${newCompanyName}" against ${totalCompanies} existing companies in batches of ${batchSize}`);
+    
+    // Process companies in batches
+    for (let i = 0; i < totalCompanies; i += batchSize) {
+      const batch = existingCompanies.slice(i, i + batchSize);
+      const batchNumber = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(totalCompanies / batchSize);
+      
+      console.log(`Checking batch ${batchNumber}/${totalBatches} with ${batch.length} companies`);
+      
+      const isSimilar = checkSimilarityWithAIBatch(newCompanyName, batch);
+      
+      if (isSimilar) {
+        console.log(`Duplicate found in batch ${batchNumber}: "${newCompanyName}" is similar to existing companies`);
+        return true;
+      }
+    }
+    
+    console.log(`No duplicates found for "${newCompanyName}" after checking all ${totalCompanies} companies`);
+    return false;
+    
+  } catch (error) {
+    console.error('Error in comprehensive similarity check:', error);
+    return false; // Default to not duplicate if AI check fails
+  }
+}
+
+/**
+ * Use AI to check if a company name is similar to any companies in a specific batch
+ * This is the original checkSimilarityWithAI function renamed for clarity
+ */
+function checkSimilarityWithAIBatch(newCompanyName, existingCompaniesBatch) {
+  try {
     const prompt = `I need to check if a new company name is similar to any existing companies in a list.
 
 New company: "${newCompanyName}"
 
 Existing companies:
-${limitedExisting.map((company, index) => `${index + 1}. ${company}`).join('\n')}
+${existingCompaniesBatch.map((company, index) => `${index + 1}. ${company}`).join('\n')}
 
 Instructions:
 - Check if the new company name is the same as or very similar to any existing company
@@ -405,13 +464,13 @@ Do not include any explanations or additional text.`;
     const isSimilar = aiResponse.includes('YES');
     
     if (isSimilar) {
-      console.log(`AI detected similarity: "${newCompanyName}" is similar to existing companies`);
+      console.log(`AI detected similarity: "${newCompanyName}" is similar to existing companies in this batch`);
     }
     
     return isSimilar;
     
   } catch (error) {
-    console.error('Error in AI similarity check:', error);
+    console.error('Error in AI similarity check batch:', error);
     return false; // Default to not duplicate if AI check fails
   }
 }
@@ -519,10 +578,20 @@ function clearHighlights() {
       range.setBackground(null);
     }
     
-    SpreadsheetApp.getUi().alert('All highlights have been cleared.');
+    try {
+      SpreadsheetApp.getUi().alert('All highlights have been cleared.');
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      console.log('All highlights have been cleared.');
+    }
   } catch (error) {
     console.error('Error clearing highlights:', error);
-    SpreadsheetApp.getUi().alert('Error clearing highlights: ' + error.message);
+    try {
+      SpreadsheetApp.getUi().alert('Error clearing highlights: ' + error.message);
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      throw error;
+    }
   }
 }
 
@@ -532,7 +601,12 @@ function clearHighlights() {
 function testAPIConnection() {
   try {
     if (!CONFIG.AI_API_KEY) {
-      SpreadsheetApp.getUi().alert('Please configure your API key first using "Configure Settings".');
+      try {
+        SpreadsheetApp.getUi().alert('Please configure your API key first using "Configure Settings".');
+      } catch (uiError) {
+        console.error('UI not available:', uiError);
+        throw new Error('Please configure your API key first using "Configure Settings".');
+      }
       return;
     }
     
@@ -540,12 +614,27 @@ function testAPIConnection() {
     const companies = searchCompaniesWithAI(testPrompt, 3, []);
     
     if (companies.length > 0) {
-      SpreadsheetApp.getUi().alert(`API connection successful! Test found: ${companies.join(', ')}`);
+      try {
+        SpreadsheetApp.getUi().alert(`API connection successful! Test found: ${companies.join(', ')}`);
+      } catch (uiError) {
+        console.error('UI not available:', uiError);
+        console.log(`API connection successful! Test found: ${companies.join(', ')}`);
+      }
     } else {
-      SpreadsheetApp.getUi().alert('API connection successful but no companies returned.');
+      try {
+        SpreadsheetApp.getUi().alert('API connection successful but no companies returned.');
+      } catch (uiError) {
+        console.error('UI not available:', uiError);
+        console.log('API connection successful but no companies returned.');
+      }
     }
   } catch (error) {
-    SpreadsheetApp.getUi().alert('API connection failed: ' + error.message);
+    try {
+      SpreadsheetApp.getUi().alert('API connection failed: ' + error.message);
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      throw error;
+    }
   }
 }
 
@@ -553,52 +642,62 @@ function testAPIConnection() {
  * Show configuration interface for user settings
  */
 function showConfigurationInterface() {
-  const ui = SpreadsheetApp.getUi();
-  
-  // Get current settings
-  const currentApiKey = CONFIG.AI_API_KEY || '';
-  const currentMaxCompanies = CONFIG.MAX_COMPANIES;
-  const currentHighlightColor = CONFIG.HIGHLIGHT_COLOR;
-  
-  // Create HTML template for configuration
-  const htmlTemplate = HtmlService.createTemplateFromFile('ConfigurationInterface');
-  htmlTemplate.currentApiKey = currentApiKey;
-  htmlTemplate.currentMaxCompanies = currentMaxCompanies;
-  htmlTemplate.currentHighlightColor = currentHighlightColor;
-  
-  const htmlOutput = htmlTemplate.evaluate()
-    .setWidth(500)
-    .setHeight(600);
-  
-  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Employer Finder Configuration');
+  try {
+    const ui = SpreadsheetApp.getUi();
+    
+    // Get current settings
+    const currentApiKey = CONFIG.AI_API_KEY || '';
+    const currentMaxCompanies = CONFIG.MAX_COMPANIES;
+    const currentHighlightColor = CONFIG.HIGHLIGHT_COLOR;
+    
+    // Create HTML template for configuration
+    const htmlTemplate = HtmlService.createTemplateFromFile('ConfigurationInterface');
+    htmlTemplate.currentApiKey = currentApiKey;
+    htmlTemplate.currentMaxCompanies = currentMaxCompanies;
+    htmlTemplate.currentHighlightColor = currentHighlightColor;
+    
+    const htmlOutput = htmlTemplate.evaluate()
+      .setWidth(500)
+      .setHeight(600);
+    
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Employer Finder Configuration');
+  } catch (uiError) {
+    console.error('UI not available:', uiError);
+    throw new Error('Configuration interface is not available in this context. Please use the script from within Google Sheets.');
+  }
 }
 
 /**
  * Show advanced search instructions interface
  */
 function showSearchInstructionsInterface() {
-  // Check if API key is configured
-  if (!CONFIG.AI_API_KEY) {
-    const setupResponse = SpreadsheetApp.getUi().alert(
-      'API Key Required',
-      'You need to configure your OpenAI API key first. Would you like to set it up now?',
-      SpreadsheetApp.getUi().ButtonSet.YES_NO
-    );
-    
-    if (setupResponse === SpreadsheetApp.getUi().Button.YES) {
-      showConfigurationInterface();
+  try {
+    // Check if API key is configured
+    if (!CONFIG.AI_API_KEY) {
+      const setupResponse = SpreadsheetApp.getUi().alert(
+        'API Key Required',
+        'You need to configure your OpenAI API key first. Would you like to set it up now?',
+        SpreadsheetApp.getUi().ButtonSet.YES_NO
+      );
+      
+      if (setupResponse === SpreadsheetApp.getUi().Button.YES) {
+        showConfigurationInterface();
+      }
+      return;
     }
-    return;
+    
+    // Create HTML template for search instructions
+    const htmlTemplate = HtmlService.createTemplateFromFile('SearchInstructionsInterface');
+    
+    const htmlOutput = htmlTemplate.evaluate()
+      .setWidth(600)
+      .setHeight(700);
+    
+    SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Advanced Company Search');
+  } catch (uiError) {
+    console.error('UI not available:', uiError);
+    throw new Error('Search interface is not available in this context. Please use the script from within Google Sheets.');
   }
-  
-  // Create HTML template for search instructions
-  const htmlTemplate = HtmlService.createTemplateFromFile('SearchInstructionsInterface');
-  
-  const htmlOutput = htmlTemplate.evaluate()
-    .setWidth(600)
-    .setHeight(700);
-  
-  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Advanced Company Search');
 }
 
 
@@ -634,21 +733,31 @@ function saveConfiguration(apiKey, maxCompanies, highlightColor) {
     console.log('Configuration saved to Properties Service');
     console.log('API key saved:', !!CONFIG.AI_API_KEY);
     
-    SpreadsheetApp.getUi().alert('Configuration saved successfully!');
-    
-    // Test the API connection
-    const testResponse = SpreadsheetApp.getUi().alert(
-      'Test API Connection',
-      'Would you like to test the API connection now?',
-      SpreadsheetApp.getUi().ButtonSet.YES_NO
-    );
-    
-    if (testResponse === SpreadsheetApp.getUi().Button.YES) {
-      testAPIConnection();
+    try {
+      SpreadsheetApp.getUi().alert('Configuration saved successfully!');
+      
+      // Test the API connection
+      const testResponse = SpreadsheetApp.getUi().alert(
+        'Test API Connection',
+        'Would you like to test the API connection now?',
+        SpreadsheetApp.getUi().ButtonSet.YES_NO
+      );
+      
+      if (testResponse === SpreadsheetApp.getUi().Button.YES) {
+        testAPIConnection();
+      }
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      console.log('Configuration saved successfully!');
     }
     
   } catch (error) {
-    SpreadsheetApp.getUi().alert('Error saving configuration: ' + error.message);
+    try {
+      SpreadsheetApp.getUi().alert('Error saving configuration: ' + error.message);
+    } catch (uiError) {
+      console.error('UI not available:', uiError);
+      throw error;
+    }
   }
 }
 
