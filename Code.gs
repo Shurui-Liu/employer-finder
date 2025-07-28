@@ -195,7 +195,8 @@ function getUserInput() {
 }
 
 /**
- * Search for companies using AI API with efficient duplicate prevention
+ * Search for companies using AI API with iterative duplicate prevention
+ * Keeps searching until the requested number of non-duplicate companies are found
  */
 function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
   try {
@@ -205,14 +206,28 @@ function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
       existingCompaniesSet = new Set(existingCompaniesSet || []);
     }
     
-    // Convert Set to array for AI prompt (limit to first 20 to avoid token limits)
-    const existingCompaniesArray = Array.from(existingCompaniesSet).slice(0, 20);
-    const existingCompaniesText = existingCompaniesArray.length > 0 
-      ? `Avoid these companies: ${existingCompaniesArray.join(', ')}`
-      : '';
+    const foundCompanies = [];
+    const maxAttempts = 5; // Prevent infinite loops
+    let attempts = 0;
     
-    const prompt = `Find ${count} real companies that match these detailed instructions: "${criteria}". 
-    
+    while (foundCompanies.length < count && attempts < maxAttempts) {
+      attempts++;
+      console.log(`Search attempt ${attempts}: Found ${foundCompanies.length}/${count} companies so far`);
+      
+      // Calculate how many more companies we need
+      const remainingCount = count - foundCompanies.length;
+      
+      // Convert Set to array for AI prompt (limit to first 20 to avoid token limits)
+      const existingCompaniesArray = Array.from(existingCompaniesSet).slice(0, 20);
+      const existingCompaniesText = existingCompaniesArray.length > 0 
+        ? `Avoid these companies: ${existingCompaniesArray.join(', ')}`
+        : '';
+      
+      // Ask for more companies than we need to account for potential duplicates
+      const requestCount = Math.min(remainingCount * 2, 10); // Request 2x what we need, max 10
+      
+      const prompt = `Find ${requestCount} real companies that match these detailed instructions: "${criteria}". 
+      
 Requirements:
 - Return only company names, one per line
 - Do not include any explanations or additional text
@@ -221,53 +236,77 @@ Requirements:
 - Focus on companies that match ALL the specific criteria mentioned
 - Consider industry, location, size, technology focus, funding stage, and other details provided
 - Prioritize companies that best match the detailed requirements
+- Try to provide different companies than in previous searches
 
 Format: Just list the company names, one per line.`;
 
-    const requestBody = {
-      model: 'gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'user',
-          content: prompt
+      const requestBody = {
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 500,
+        temperature: 0.7 + (attempts * 0.1) // Increase creativity with each attempt
+      };
+
+      const options = {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${CONFIG.AI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        payload: JSON.stringify(requestBody)
+      };
+
+      const response = UrlFetchApp.fetch(CONFIG.AI_API_URL, options);
+      const responseData = JSON.parse(response.getContentText());
+      
+      if (responseData.error) {
+        throw new Error(`AI API Error: ${responseData.error.message}`);
+      }
+      
+      const aiResponse = responseData.choices[0].message.content;
+      console.log(`AI Response (attempt ${attempts}):`, aiResponse);
+      
+      const newCompanies = aiResponse.split('\n')
+        .map(company => company.trim())
+        .filter(company => company && company.length > 0);
+      
+      console.log(`New companies from AI (attempt ${attempts}):`, newCompanies);
+      
+      // Filter out duplicates and add to our collection
+      for (const company of newCompanies) {
+        if (!isDuplicate(company, existingCompaniesSet) && !foundCompanies.includes(company)) {
+          foundCompanies.push(company);
+          if (foundCompanies.length >= count) {
+            break;
+          }
         }
-      ],
-      max_tokens: 500,
-      temperature: 0.7
-    };
-
-    const options = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${CONFIG.AI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      payload: JSON.stringify(requestBody)
-    };
-
-    const response = UrlFetchApp.fetch(CONFIG.AI_API_URL, options);
-    const responseData = JSON.parse(response.getContentText());
-    
-    if (responseData.error) {
-      throw new Error(`AI API Error: ${responseData.error.message}`);
+      }
+      
+      console.log(`After attempt ${attempts}: Found ${foundCompanies.length}/${count} unique companies`);
+      
+      // Add a small delay between API calls to be respectful
+      if (attempts < maxAttempts && foundCompanies.length < count) {
+        Utilities.sleep(1000); // 1 second delay
+      }
     }
     
-    const aiResponse = responseData.choices[0].message.content;
-    console.log('AI Response:', aiResponse);
+    const finalCompanies = foundCompanies.slice(0, count);
+    console.log('Final companies to add:', finalCompanies);
     
-    const allCompanies = aiResponse.split('\n')
-      .map(company => company.trim())
-      .filter(company => company && company.length > 0);
+    if (finalCompanies.length === 0) {
+      throw new Error('Unable to find any non-duplicate companies matching your criteria after multiple attempts.');
+    }
     
-    console.log('All companies from AI:', allCompanies);
+    if (finalCompanies.length < count) {
+      console.warn(`Only found ${finalCompanies.length} companies out of ${count} requested`);
+    }
     
-    const uniqueCompanies = allCompanies.filter(company => !isDuplicate(company, existingCompaniesSet));
-    console.log('Companies after duplicate filtering:', uniqueCompanies);
-    
-    const companies = uniqueCompanies.slice(0, count);
-    console.log('Final companies to add:', companies);
-    
-    return companies;
+    return finalCompanies;
     
   } catch (error) {
     console.error('Error calling AI API:', error);
