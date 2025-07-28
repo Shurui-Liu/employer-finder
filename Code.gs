@@ -134,6 +134,46 @@ function normalizeCompanyName(companyName) {
 }
 
 /**
+ * Clean and improve company names for display
+ * Removes numbering, formatting, and ensures specific names
+ */
+function cleanCompanyName(companyName) {
+  if (!companyName || typeof companyName !== 'string') return null;
+  
+  let cleaned = companyName.trim();
+  
+  // Remove numbering patterns (e.g., "1. ", "12. ", "1)", "12)")
+  cleaned = cleaned.replace(/^\d+\.?\s*/, ''); // Remove "1. ", "12. " etc.
+  cleaned = cleaned.replace(/^\d+\)\s*/, ''); // Remove "1) ", "12) " etc.
+  
+  // Remove bullet points and other formatting
+  cleaned = cleaned.replace(/^[•\-\*]\s*/, ''); // Remove "• ", "- ", "* " etc.
+  
+  // Remove extra whitespace
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  // Ensure we have a valid company name
+  if (!cleaned || cleaned.length < 2) return null;
+  
+  // Capitalize properly (first letter of each word)
+  cleaned = cleaned.replace(/\b\w/g, l => l.toUpperCase());
+  
+  // Ensure common company suffixes are properly formatted
+  const suffixPatterns = [
+    /\bInc\b/i, /\bCorp\b/i, /\bLLC\b/i, /\bLtd\b/i, /\bLimited\b/i,
+    /\bCompany\b/i, /\bCo\b/i, /\bGroup\b/i, /\bTechnologies\b/i,
+    /\bTech\b/i, /\bSystems\b/i, /\bSolutions\b/i, /\bServices\b/i,
+    /\bInternational\b/i, /\bIntl\b/i
+  ];
+  
+  suffixPatterns.forEach(pattern => {
+    cleaned = cleaned.replace(pattern, match => match.toUpperCase());
+  });
+  
+  return cleaned;
+}
+
+/**
  * Get user input for search criteria and company count
  */
 function getUserInput() {
@@ -271,8 +311,10 @@ Requirements:
 - Consider industry, location, size, technology focus, funding stage, and other details provided
 - Prioritize companies that best match the detailed requirements
 - Try to provide different companies than in previous searches
+- Use the FULL, SPECIFIC company names
+- Do NOT include numbers, bullet points, or any formatting before company names
 
-Format: Just list the company names, one per line.`;
+Format: Just list the company names, one per line, with full specific names.`;
 
       const requestBody = {
         model: 'gpt-3.5-turbo',
@@ -306,7 +348,7 @@ Format: Just list the company names, one per line.`;
       console.log(`AI Response (attempt ${attempts}):`, aiResponse);
       
       const newCompanies = aiResponse.split('\n')
-        .map(company => company.trim())
+        .map(company => cleanCompanyName(company))
         .filter(company => company && company.length > 0);
       
       console.log(`New companies from AI (attempt ${attempts}):`, newCompanies);
