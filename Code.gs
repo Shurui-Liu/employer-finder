@@ -18,6 +18,9 @@ const CONFIG = {
  */
 function searchAndAddCompanies() {
   try {
+    // Load configuration to ensure we have the latest settings
+    loadConfiguration();
+    
     // Check if API key is configured
     if (!CONFIG.AI_API_KEY) {
       const setupResponse = SpreadsheetApp.getUi().alert(
@@ -52,7 +55,9 @@ function searchAndAddCompanies() {
     }
     
     // Add new companies to the sheet
-    addCompaniesToSheet(sheet, newCompanies, existingCompanies.length);
+    const lastRow = sheet.getLastRow();
+    const startRow = Math.max(lastRow, 0); // Ensure we start at row 1 or after the last row
+    addCompaniesToSheet(sheet, newCompanies, startRow);
     
     // Show success message
     SpreadsheetApp.getUi().alert(`Successfully added ${newCompanies.length} new companies to the sheet!`);
@@ -71,7 +76,9 @@ function getExistingCompanies(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow === 0) return new Set();
   
-  const companyRange = sheet.getRange(1, 1, lastRow, 1);
+  // Skip header row (row 1) and start from row 2
+  const startRow = lastRow > 1 ? 2 : 1;
+  const companyRange = sheet.getRange(startRow, 1, lastRow - startRow + 1, 1);
   const companies = companyRange.getValues().flat().filter(company => company !== '');
   
   // Create a Set for O(1) lookup efficiency
@@ -83,6 +90,8 @@ function getExistingCompanies(sheet) {
     }
   });
   
+  console.log(`Found ${companies.length} companies, created Set with ${companySet.size} normalized names`);
+  console.log('Sample normalized names:', Array.from(companySet).slice(0, 5));
   return companySet;
 }
 
@@ -190,6 +199,12 @@ function getUserInput() {
  */
 function searchCompaniesWithAI(criteria, count, existingCompaniesSet) {
   try {
+    // Ensure existingCompaniesSet is a Set
+    if (!(existingCompaniesSet instanceof Set)) {
+      console.warn('existingCompaniesSet is not a Set, converting to Set');
+      existingCompaniesSet = new Set(existingCompaniesSet || []);
+    }
+    
     // Convert Set to array for AI prompt (limit to first 20 to avoid token limits)
     const existingCompaniesArray = Array.from(existingCompaniesSet).slice(0, 20);
     const existingCompaniesText = existingCompaniesArray.length > 0 
@@ -238,12 +253,19 @@ Format: Just list the company names, one per line.`;
     }
     
     const aiResponse = responseData.choices[0].message.content;
-    const companies = aiResponse.split('\n')
+    console.log('AI Response:', aiResponse);
+    
+    const allCompanies = aiResponse.split('\n')
       .map(company => company.trim())
-      .filter(company => company && company.length > 0)
-      // Use efficient Set lookup for duplicate checking
-      .filter(company => !isDuplicate(company, existingCompaniesSet))
-      .slice(0, count);
+      .filter(company => company && company.length > 0);
+    
+    console.log('All companies from AI:', allCompanies);
+    
+    const uniqueCompanies = allCompanies.filter(company => !isDuplicate(company, existingCompaniesSet));
+    console.log('Companies after duplicate filtering:', uniqueCompanies);
+    
+    const companies = uniqueCompanies.slice(0, count);
+    console.log('Final companies to add:', companies);
     
     return companies;
     
@@ -254,18 +276,119 @@ Format: Just list the company names, one per line.`;
 }
 
 /**
- * Efficient duplicate checking using normalized company names
+ * Check if a company name is similar to existing companies using AI
+ * More accurate than rule-based similarity checking
  */
 function isDuplicate(companyName, existingCompaniesSet) {
+  // Ensure existingCompaniesSet is a Set
+  if (!(existingCompaniesSet instanceof Set)) {
+    console.warn('existingCompaniesSet is not a Set, converting to Set');
+    existingCompaniesSet = new Set(existingCompaniesSet || []);
+  }
+  
   const normalizedName = normalizeCompanyName(companyName);
-  return normalizedName && existingCompaniesSet.has(normalizedName);
+  if (!normalizedName) return false;
+  
+  // Check for exact normalized match first (fast check)
+  if (existingCompaniesSet.has(normalizedName)) {
+    console.log(`Exact duplicate found: "${companyName}" -> normalized: "${normalizedName}"`);
+    return true;
+  }
+  
+  // If no exact match, use AI to check for similarity
+  const existingCompaniesArray = Array.from(existingCompaniesSet);
+  if (existingCompaniesArray.length > 0) {
+    return checkSimilarityWithAI(companyName, existingCompaniesArray);
+  }
+  
+  return false;
 }
+
+/**
+ * Use AI to check if a company name is similar to any existing companies
+ * More accurate than rule-based similarity checking
+ */
+function checkSimilarityWithAI(newCompanyName, existingCompanies) {
+  try {
+    // Limit to first 20 existing companies to avoid token limits
+    const limitedExisting = existingCompanies.slice(0, 20);
+    
+    const prompt = `I need to check if a new company name is similar to any existing companies in a list.
+
+New company: "${newCompanyName}"
+
+Existing companies:
+${limitedExisting.map((company, index) => `${index + 1}. ${company}`).join('\n')}
+
+Instructions:
+- Check if the new company name is the same as or very similar to any existing company
+- Consider variations like "D Wave" vs "DWave Technologies Ltd" as the same company
+- Consider abbreviations like "IBM" vs "International Business Machines" as the same company
+- Consider different legal forms like "Microsoft Corp" vs "Microsoft Corporation" as the same company
+- Consider common name variations and alternative spellings
+
+Respond with ONLY:
+- "YES" if the new company is similar to any existing company
+- "NO" if the new company is completely different from all existing companies
+
+Do not include any explanations or additional text.`;
+
+    const requestBody = {
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      max_tokens: 10,
+      temperature: 0.1
+    };
+
+    const options = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.AI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      payload: JSON.stringify(requestBody)
+    };
+
+    const response = UrlFetchApp.fetch(CONFIG.AI_API_URL, options);
+    const responseData = JSON.parse(response.getContentText());
+    
+    if (responseData.error) {
+      console.error('AI similarity check error:', responseData.error);
+      return false; // Default to not duplicate if AI check fails
+    }
+    
+    const aiResponse = responseData.choices[0].message.content.trim().toUpperCase();
+    const isSimilar = aiResponse.includes('YES');
+    
+    if (isSimilar) {
+      console.log(`AI detected similarity: "${newCompanyName}" is similar to existing companies`);
+    }
+    
+    return isSimilar;
+    
+  } catch (error) {
+    console.error('Error in AI similarity check:', error);
+    return false; // Default to not duplicate if AI check fails
+  }
+}
+
+
 
 /**
  * Search for companies using instructions from the configuration interface
  */
 function searchCompaniesWithInstructions(searchInstructions, count) {
   try {
+    console.log('Starting searchCompaniesWithInstructions with:', { searchInstructions, count });
+    
+    // Load configuration to ensure we have the latest settings
+    loadConfiguration();
+    
     // Check if API key is configured
     if (!CONFIG.AI_API_KEY) {
       throw new Error('API key is not configured. Please configure your API key first.');
@@ -276,17 +399,20 @@ function searchCompaniesWithInstructions(searchInstructions, count) {
     const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
     
     // Get existing companies from the first column
-    const existingCompanies = getExistingCompanies(sheet);
+    const existingCompaniesSet = getExistingCompanies(sheet);
+    console.log('Existing companies Set type:', typeof existingCompaniesSet, 'Is Set:', existingCompaniesSet instanceof Set);
     
     // Search for new companies using AI
-    const newCompanies = searchCompaniesWithAI(searchInstructions, count, existingCompanies);
+    const newCompanies = searchCompaniesWithAI(searchInstructions, count, existingCompaniesSet);
     
     if (newCompanies.length === 0) {
       throw new Error('No new companies found matching your criteria.');
     }
     
     // Add new companies to the sheet
-    addCompaniesToSheet(sheet, newCompanies, existingCompanies.size);
+    const lastRow = sheet.getLastRow();
+    const startRow = Math.max(lastRow, 0); // Ensure we start at row 1 or after the last row
+    addCompaniesToSheet(sheet, newCompanies, startRow);
     
     return `Successfully added ${newCompanies.length} new companies to the sheet!`;
     
@@ -303,8 +429,11 @@ function searchCompaniesWithInstructions(searchInstructions, count) {
 function addCompaniesToSheet(sheet, newCompanies, startRow) {
   if (newCompanies.length === 0) return;
   
+  // Ensure startRow is valid (minimum 0, which becomes row 1 when we add 1)
+  const validStartRow = Math.max(startRow, 0);
+  
   // Get the range where we'll add new companies (Column A only)
-  const targetRange = sheet.getRange(startRow + 1, 1, newCompanies.length, 1);
+  const targetRange = sheet.getRange(validStartRow + 1, 1, newCompanies.length, 1);
   
   // Set the company names
   const companyData = newCompanies.map(company => [company]);
@@ -316,61 +445,7 @@ function addCompaniesToSheet(sheet, newCompanies, startRow) {
   // Column B is completely untouched - no data added there
 }
 
-/**
- * Validate duplicate prevention by checking the entire sheet
- * This function can be run manually to verify no duplicates exist
- */
-function validateNoDuplicates() {
-  try {
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
-    
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) {
-      SpreadsheetApp.getUi().alert('Sheet is empty or has only headers. No duplicates to check.');
-      return;
-    }
-    
-    const companyRange = sheet.getRange(2, 1, lastRow - 1, 1); // Skip header row
-    const companies = companyRange.getValues().flat().filter(company => company !== '');
-    
-    const normalizedCompanies = new Map(); // Map to track original names
-    const duplicates = [];
-    
-    companies.forEach((company, index) => {
-      const normalizedName = normalizeCompanyName(company.toString());
-      if (normalizedName) {
-        if (normalizedCompanies.has(normalizedName)) {
-          duplicates.push({
-            original1: normalizedCompanies.get(normalizedName),
-            original2: company.toString(),
-            normalized: normalizedName,
-            row1: normalizedCompanies.get(normalizedName + '_row'),
-            row2: index + 2 // +2 because we skipped header and arrays are 0-indexed
-          });
-        } else {
-          normalizedCompanies.set(normalizedName, company.toString());
-          normalizedCompanies.set(normalizedName + '_row', index + 2);
-        }
-      }
-    });
-    
-    if (duplicates.length === 0) {
-      SpreadsheetApp.getUi().alert(`✅ No duplicates found! Checked ${companies.length} companies.`);
-    } else {
-      let message = `❌ Found ${duplicates.length} duplicate(s):\n\n`;
-      duplicates.forEach((dup, index) => {
-        message += `${index + 1}. "${dup.original1}" (row ${dup.row1}) and "${dup.original2}" (row ${dup.row2})\n`;
-        message += `   Normalized: "${dup.normalized}"\n\n`;
-      });
-      SpreadsheetApp.getUi().alert(message);
-    }
-    
-  } catch (error) {
-    console.error('Error validating duplicates:', error);
-    SpreadsheetApp.getUi().alert('Error checking for duplicates: ' + error.message);
-  }
-}
+
 
 /**
  * Create a custom menu in Google Sheets
@@ -387,7 +462,6 @@ function onOpen() {
     .addItem('Test API Connection', 'testAPIConnection')
     .addItem('Clear API Key', 'clearAPIKey')
     .addSeparator()
-    .addItem('Validate No Duplicates', 'validateNoDuplicates')
     .addItem('Clear Highlights', 'clearHighlights')
     .addToUi();
 }
@@ -488,36 +562,7 @@ function showSearchInstructionsInterface() {
   SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Advanced Company Search');
 }
 
-/**
- * Search for companies using detailed instructions from the interface
- */
-function searchCompaniesWithInstructions(searchInstructions, count) {
-  try {
-    // Get the active spreadsheet and sheet
-    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_NAME) || spreadsheet.getActiveSheet();
-    
-    // Get existing companies from the first column
-    const existingCompanies = getExistingCompanies(sheet);
-    
-    // Search for new companies using AI with detailed instructions
-    const newCompanies = searchCompaniesWithAI(searchInstructions, count, existingCompanies);
-    
-    if (newCompanies.length === 0) {
-      throw new Error('No new companies found matching your detailed criteria.');
-    }
-    
-    // Add new companies to the sheet
-    addCompaniesToSheet(sheet, newCompanies, existingCompanies.size);
-    
-    // Show success message
-    SpreadsheetApp.getUi().alert(`Successfully added ${newCompanies.length} new companies to the sheet!`);
-    
-  } catch (error) {
-    console.error('Error in searchCompaniesWithInstructions:', error);
-    throw new Error('Failed to search for companies: ' + error.message);
-  }
-}
+
 
 /**
  * Save configuration settings
@@ -547,6 +592,9 @@ function saveConfiguration(apiKey, maxCompanies, highlightColor) {
       'HIGHLIGHT_COLOR': CONFIG.HIGHLIGHT_COLOR
     });
     
+    console.log('Configuration saved to Properties Service');
+    console.log('API key saved:', !!CONFIG.AI_API_KEY);
+    
     SpreadsheetApp.getUi().alert('Configuration saved successfully!');
     
     // Test the API connection
@@ -575,8 +623,13 @@ function loadConfiguration() {
     const savedMaxCompanies = properties.getProperty('MAX_COMPANIES');
     const savedHighlightColor = properties.getProperty('HIGHLIGHT_COLOR');
     
+    console.log('Loading configuration - savedApiKey exists:', !!savedApiKey);
+    
     if (savedApiKey) {
       CONFIG.AI_API_KEY = savedApiKey;
+      console.log('API key loaded successfully');
+    } else {
+      console.log('No saved API key found');
     }
     if (savedMaxCompanies) {
       CONFIG.MAX_COMPANIES = parseInt(savedMaxCompanies);
